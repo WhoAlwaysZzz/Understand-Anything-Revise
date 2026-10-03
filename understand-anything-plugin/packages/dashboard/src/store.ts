@@ -16,6 +16,10 @@ export type Complexity = "simple" | "moderate" | "complex";
 export type EdgeCategory = "structural" | "behavioral" | "data-flow" | "dependencies" | "semantic" | "infrastructure" | "domain" | "knowledge" | "design";
 export type ViewMode = "structural" | "domain" | "knowledge";
 export type DetailLevel = "file" | "class";
+/** "content" = full-text search over source files (results arrive from the server). */
+export type SearchMode = "fuzzy" | "semantic" | "content";
+/** "embeddings" = settings with the embedding section expanded. */
+export type AiDialogView = "chat" | "settings" | "embeddings";
 
 export interface FilterState {
   nodeTypes: Set<NodeType>;
@@ -95,6 +99,26 @@ function buildGraphIndexes(graph: KnowledgeGraph): {
   return { nodesById, nodeIdToLayerId, nodeIdToLayerIds };
 }
 
+/** User tags/notes per node id, folded into the fuzzy search index. */
+export type SearchAnnotations = Record<string, { tags: string[]; note: string }>;
+
+/**
+ * Nodes as the search engine should see them: user tags join the analyzer's
+ * tags and the user's note is searchable alongside languageNotes.
+ */
+function searchableNodes(nodes: GraphNode[], annotations: SearchAnnotations): GraphNode[] {
+  if (Object.keys(annotations).length === 0) return nodes;
+  return nodes.map((node) => {
+    const a = annotations[node.id];
+    if (!a) return node;
+    return {
+      ...node,
+      tags: [...node.tags, ...a.tags],
+      languageNotes: [node.languageNotes, a.note].filter(Boolean).join("\n"),
+    };
+  });
+}
+
 /** Maximum number of entries in the sidebar navigation history. */
 const MAX_HISTORY = 50;
 
@@ -110,8 +134,13 @@ interface DashboardStore {
   searchQuery: string;
   searchResults: SearchResult[];
   searchEngine: SearchEngine | null;
-  searchMode: "fuzzy" | "semantic";
-  setSearchMode: (mode: "fuzzy" | "semantic") => void;
+  searchAnnotations: SearchAnnotations;
+  /** Rebuild the search index with the user's latest tags/notes. */
+  setSearchAnnotations: (annotations: SearchAnnotations) => void;
+  searchMode: SearchMode;
+  setSearchMode: (mode: SearchMode) => void;
+  /** Replace search results directly — used by content search, whose hits come from the server. */
+  setSearchResults: (results: SearchResult[]) => void;
 
   // Lens navigation
   navigationLevel: NavigationLevel;
@@ -120,10 +149,14 @@ interface DashboardStore {
   codeViewerOpen: boolean;
   codeViewerNodeId: string | null;
   codeViewerExpanded: boolean;
+  /** 1-based line to scroll to and mark (e.g. a content-search hit); null = node's lineRange. */
+  codeViewerLine: number | null;
 
   tourActive: boolean;
   currentTourStep: number;
   tourHighlightedNodeIds: string[];
+  /** Steps of a user-built tour (e.g. "My tour" from notes); null = the graph's own tour. */
+  customTour: TourStep[] | null;
 
   persona: Persona;
 
@@ -142,6 +175,10 @@ interface DashboardStore {
   filterPanelOpen: boolean;
   exportMenuOpen: boolean;
   pathFinderOpen: boolean;
+  /** Ask-AI dialog: null = closed; nodeId null = settings only (no node chosen). */
+  aiDialog: { nodeId: string | null; view: AiDialogView } | null;
+  openAiDialog: (nodeId: string | null, view?: AiDialogView) => void;
+  closeAiDialog: () => void;
   reactFlowInstance: ReactFlowInstance | null;
 
   // Node type category filters
@@ -166,7 +203,7 @@ interface DashboardStore {
   setFocusNode: (nodeId: string | null) => void;
   setSearchQuery: (query: string) => void;
   setPersona: (persona: Persona) => void;
-  openCodeViewer: (nodeId: string) => void;
+  openCodeViewer: (nodeId: string, line?: number) => void;
   closeCodeViewer: () => void;
   expandCodeViewer: () => void;
   collapseCodeViewer: () => void;
@@ -184,6 +221,8 @@ interface DashboardStore {
   hasActiveFilters: () => boolean;
 
   startTour: () => void;
+  /** Play `steps` with the regular tour machinery instead of graph.tour. */
+  startCustomTour: (steps: TourStep[]) => void;
   stopTour: () => void;
   setTourStep: (step: number) => void;
   nextTourStep: () => void;
@@ -240,8 +279,8 @@ interface DashboardStore {
   clearLayoutIssues: () => void;
 }
 
-function getSortedTour(graph: KnowledgeGraph): TourStep[] {
-  const tour = graph.tour ?? [];
+function getSortedTour(graph: KnowledgeGraph | null, customTour: TourStep[] | null = null): TourStep[] {
+  const tour = customTour ?? graph?.tour ?? [];
   return [...tour].sort((a, b) => a.order - b.order);
 }
 
@@ -296,6 +335,7 @@ export const useDashboardStore = create<DashboardStore>()((set, get) => ({
   searchQuery: "",
   searchResults: [],
   searchEngine: null,
+  searchAnnotations: {},
   searchMode: "fuzzy",
 
   navigationLevel: "overview",
@@ -303,10 +343,12 @@ export const useDashboardStore = create<DashboardStore>()((set, get) => ({
   codeViewerOpen: false,
   codeViewerNodeId: null,
   codeViewerExpanded: false,
+  codeViewerLine: null,
 
   tourActive: false,
   currentTourStep: 0,
   tourHighlightedNodeIds: [],
+  customTour: null,
 
   persona: "junior",
 
@@ -321,6 +363,7 @@ export const useDashboardStore = create<DashboardStore>()((set, get) => ({
   filterPanelOpen: false,
   exportMenuOpen: false,
   pathFinderOpen: false,
+  aiDialog: null,
   reactFlowInstance: null,
 
   nodeTypeFilters: { code: true, config: true, docs: true, infra: true, data: true, domain: true, knowledge: true },
@@ -364,9 +407,12 @@ export const useDashboardStore = create<DashboardStore>()((set, get) => ({
     })),
 
   setGraph: (graph) => {
-    const searchEngine = new SearchEngine(graph.nodes);
-    const query = get().searchQuery;
-    const searchResults = query.trim() ? searchEngine.search(query) : [];
+    const searchEngine = new SearchEngine(searchableNodes(graph.nodes, get().searchAnnotations));
+    const { searchQuery: query, searchMode } = get();
+    // Content-search hits are file-path based and refreshed by the search bar.
+    const searchResults =
+      searchMode === "content" ? get().searchResults
+      : query.trim() ? searchEngine.search(query) : [];
     const { viewMode, domainGraph, activeDomainId } = get();
     // Preserve domain view if a domain graph is already loaded
     const keepDomainView = viewMode === "domain" && domainGraph !== null;
@@ -529,17 +575,45 @@ export const useDashboardStore = create<DashboardStore>()((set, get) => ({
       expandedContainers: new Set(),
       pendingFocusContainer: null,
     }),
-  setSearchMode: (mode) => set({ searchMode: mode }),
+  setSearchMode: (mode) => {
+    const { searchEngine, searchQuery } = get();
+    set({
+      searchMode: mode,
+      searchResults:
+        mode !== "content" && searchEngine && searchQuery.trim()
+          ? searchEngine.search(searchQuery)
+          : [],
+    });
+  },
+  setSearchResults: (results) => set({ searchResults: results }),
+  setSearchAnnotations: (annotations) => {
+    const { graph, searchQuery, searchMode } = get();
+    if (!graph) {
+      set({ searchAnnotations: annotations });
+      return;
+    }
+    const searchEngine = new SearchEngine(searchableNodes(graph.nodes, annotations));
+    set({
+      searchAnnotations: annotations,
+      searchEngine,
+      ...(searchMode !== "content" && searchQuery.trim()
+        ? { searchResults: searchEngine.search(searchQuery) }
+        : {}),
+    });
+  },
   setSearchQuery: (query) => {
     const engine = get().searchEngine;
     const mode = get().searchMode;
+    if (mode === "content") {
+      set({ searchQuery: query, ...(query.trim() ? {} : { searchResults: [] }) });
+      return;
+    }
     if (!engine || !query.trim()) {
       set({ searchQuery: query, searchResults: [] });
       return;
     }
-    // Currently both modes use the same fuzzy engine
-    // When embeddings are available, "semantic" mode will use SemanticSearchEngine
-    void mode;
+    // Semantic mode shows fuzzy hits at once; useSemanticSearch replaces them
+    // with embedding hits when an embedding model is configured.
     const searchResults = engine.search(query);
     set({ searchQuery: query, searchResults });
   },
@@ -554,10 +628,15 @@ export const useDashboardStore = create<DashboardStore>()((set, get) => ({
       pendingFocusContainer: null,
     }),
 
-  openCodeViewer: (nodeId) =>
-    set({ codeViewerOpen: true, codeViewerNodeId: nodeId, codeViewerExpanded: false }),
+  openCodeViewer: (nodeId, line) =>
+    set({
+      codeViewerOpen: true,
+      codeViewerNodeId: nodeId,
+      codeViewerExpanded: false,
+      codeViewerLine: line ?? null,
+    }),
   closeCodeViewer: () =>
-    set({ codeViewerOpen: false, codeViewerNodeId: null, codeViewerExpanded: false }),
+    set({ codeViewerOpen: false, codeViewerNodeId: null, codeViewerExpanded: false, codeViewerLine: null }),
   expandCodeViewer: () => set({ codeViewerExpanded: true }),
   collapseCodeViewer: () => set({ codeViewerExpanded: false }),
 
@@ -591,6 +670,9 @@ export const useDashboardStore = create<DashboardStore>()((set, get) => ({
     pathFinderOpen: !state.pathFinderOpen,
   })),
 
+  openAiDialog: (nodeId, view = "chat") => set({ aiDialog: { nodeId, view } }),
+  closeAiDialog: () => set({ aiDialog: null }),
+
   setReactFlowInstance: (instance) => set({ reactFlowInstance: instance }),
 
   setFilters: (newFilters) => set((state) => ({
@@ -621,6 +703,23 @@ export const useDashboardStore = create<DashboardStore>()((set, get) => ({
     const layerNav = navigateTourToLayer(nodeIdToLayerId, sorted[0].nodeIds);
     set({
       tourActive: true,
+      customTour: null,
+      currentTourStep: 0,
+      tourHighlightedNodeIds: sorted[0].nodeIds,
+      selectedNodeId: null,
+      ...layerNav,
+      ...layerResetIfChanged(layerNav, activeLayerId),
+    });
+  },
+
+  startCustomTour: (steps) => {
+    const { nodeIdToLayerId, activeLayerId } = get();
+    if (steps.length === 0) return;
+    const sorted = getSortedTour(null, steps);
+    const layerNav = navigateTourToLayer(nodeIdToLayerId, sorted[0].nodeIds);
+    set({
+      tourActive: true,
+      customTour: sorted,
       currentTourStep: 0,
       tourHighlightedNodeIds: sorted[0].nodeIds,
       selectedNodeId: null,
@@ -632,14 +731,15 @@ export const useDashboardStore = create<DashboardStore>()((set, get) => ({
   stopTour: () =>
     set({
       tourActive: false,
+      customTour: null,
       currentTourStep: 0,
       tourHighlightedNodeIds: [],
     }),
 
   setTourStep: (step) => {
-    const { graph, nodeIdToLayerId, activeLayerId } = get();
-    if (!graph || !graph.tour || graph.tour.length === 0) return;
-    const sorted = getSortedTour(graph);
+    const { graph, customTour, nodeIdToLayerId, activeLayerId } = get();
+    const sorted = getSortedTour(graph, customTour);
+    if (sorted.length === 0) return;
     if (step < 0 || step >= sorted.length) return;
     const layerNav = navigateTourToLayer(nodeIdToLayerId, sorted[step].nodeIds);
     set({
@@ -651,9 +751,9 @@ export const useDashboardStore = create<DashboardStore>()((set, get) => ({
   },
 
   nextTourStep: () => {
-    const { graph, currentTourStep, nodeIdToLayerId, activeLayerId } = get();
-    if (!graph || !graph.tour || graph.tour.length === 0) return;
-    const sorted = getSortedTour(graph);
+    const { graph, customTour, currentTourStep, nodeIdToLayerId, activeLayerId } = get();
+    const sorted = getSortedTour(graph, customTour);
+    if (sorted.length === 0) return;
     if (currentTourStep < sorted.length - 1) {
       const next = currentTourStep + 1;
       const layerNav = navigateTourToLayer(nodeIdToLayerId, sorted[next].nodeIds);
@@ -667,10 +767,10 @@ export const useDashboardStore = create<DashboardStore>()((set, get) => ({
   },
 
   prevTourStep: () => {
-    const { graph, currentTourStep, nodeIdToLayerId, activeLayerId } = get();
-    if (!graph || !graph.tour || graph.tour.length === 0) return;
+    const { graph, customTour, currentTourStep, nodeIdToLayerId, activeLayerId } = get();
+    const sorted = getSortedTour(graph, customTour);
+    if (sorted.length === 0) return;
     if (currentTourStep > 0) {
-      const sorted = getSortedTour(graph);
       const prev = currentTourStep - 1;
       const layerNav = navigateTourToLayer(nodeIdToLayerId, sorted[prev].nodeIds);
       set({

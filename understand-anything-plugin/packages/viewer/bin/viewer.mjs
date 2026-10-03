@@ -16,6 +16,12 @@
  *   - graph JSON is served with node filePaths relativised to the project
  *   - /file-content.json only serves files listed in the graph, capped at
  *     1 MB, never binary
+ *   - /search-content.json only searches those same files
+ *   - /annotations.json (dashboard tags + notes) and /arch-rules.json
+ *     (architecture rules) are served read-only; edits made in the viewer
+ *     stay in the browser's local storage
+ *   - /git-hotspots.json runs a read-only `git log` in the project root and
+ *     only reports files listed in the graph
  */
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
@@ -24,6 +30,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getGraphFreshnessBatch } from "./dist/staleness.js";
+import {
+  ContentSearchQueryError,
+  parseContentSearchParams,
+  searchProjectContent,
+} from "./dist/content-search.js";
+import { handleAnnotationsRequest } from "./dist/annotations.js";
+import { handleArchRulesRequest } from "./dist/arch-rules.js";
+import { handleGitHotspotsRequest } from "./dist/git-hotspots.js";
 
 const DIST_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "dist");
 const MAX_SOURCE_FILE_BYTES = 1024 * 1024;
@@ -198,6 +212,23 @@ function readSourceFile(url) {
   };
 }
 
+function searchContent(url) {
+  const { query, options } = parseContentSearchParams(url.searchParams);
+  if (!query.trim()) return { statusCode: 400, payload: { error: "Missing query" } };
+  try {
+    return {
+      statusCode: 200,
+      payload: searchProjectContent(projectRoot, graphFilePathSet(), query, {
+        ...options,
+        maxFileBytes: MAX_SOURCE_FILE_BYTES,
+      }),
+    };
+  } catch (err) {
+    if (err instanceof ContentSearchQueryError) return { statusCode: 400, payload: { error: err.message } };
+    throw err;
+  }
+}
+
 function serveGraphJson(res, fileName) {
   const candidate = path.join(graphDir, fileName);
   if (fs.existsSync(candidate)) {
@@ -313,6 +344,10 @@ const PROTECTED = new Set([
   "/meta.json",
   "/config.json",
   "/file-content.json",
+  "/search-content.json",
+  "/annotations.json",
+  "/arch-rules.json",
+  "/git-hotspots.json",
   "/staleness.json",
 ]);
 
@@ -337,6 +372,36 @@ const server = createServer((req, res) => {
   if (pathname === "/file-content.json") {
     const result = readSourceFile(url);
     sendJson(res, result.statusCode, result.payload);
+    return;
+  }
+
+  if (pathname === "/search-content.json") {
+    const result = searchContent(url);
+    sendJson(res, result.statusCode, result.payload);
+    return;
+  }
+
+  if (pathname === "/annotations.json") {
+    res.setHeader("Cache-Control", "no-store");
+    void handleAnnotationsRequest(req, graphDir, { writable: false }).then((result) =>
+      sendJson(res, result.statusCode, result.payload),
+    );
+    return;
+  }
+
+  if (pathname === "/arch-rules.json") {
+    res.setHeader("Cache-Control", "no-store");
+    void handleArchRulesRequest(req, graphDir, { writable: false }).then((result) =>
+      sendJson(res, result.statusCode, result.payload),
+    );
+    return;
+  }
+
+  if (pathname === "/git-hotspots.json") {
+    res.setHeader("Cache-Control", "no-store");
+    void handleGitHotspotsRequest(url, projectRoot, graphFilePathSet()).then((result) =>
+      sendJson(res, result.statusCode, result.payload),
+    );
     return;
   }
 
@@ -383,7 +448,10 @@ function listen(attemptPort, attemptsLeft) {
     console.log(`  🔑  Dashboard URL: ${dashboardUrl}\n`);
     if (openBrowser) {
       const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-      spawn(opener, [dashboardUrl], { shell: process.platform === "win32", stdio: "ignore", detached: true }).unref();
+      const child = spawn(opener, [dashboardUrl], { shell: process.platform === "win32", stdio: "ignore", detached: true });
+      // No opener (headless Linux, minimal WSL): keep serving; the URL is printed above.
+      child.on("error", () => {});
+      child.unref();
     }
   });
 }

@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useDashboardStore } from "../store";
 import { useI18n } from "../contexts/I18nContext";
+import { NodeNotesSection, NodeTagsSection } from "./NodeAnnotations";
+import { ImpactButton, NodeChurnStats } from "./NodeAnalysis";
 import type { NodeType, EdgeType, KnowledgeGraph, GraphNode } from "@understand-anything/core/types";
 
 // Badge color classes keyed by NodeType — must be kept in sync with core NodeType union.
@@ -286,6 +288,7 @@ export default function NodeInfo() {
   const navigateToNode = useDashboardStore((s) => s.navigateToNode);
   const navigateToHistoryIndex = useDashboardStore((s) => s.navigateToHistoryIndex);
   const setFocusNode = useDashboardStore((s) => s.setFocusNode);
+  const openAiDialog = useDashboardStore((s) => s.openAiDialog);
   const openCodeViewer = useDashboardStore((s) => s.openCodeViewer);
   const focusNodeId = useDashboardStore((s) => s.focusNodeId);
   const viewMode = useDashboardStore((s) => s.viewMode);
@@ -385,18 +388,28 @@ export default function NodeInfo() {
         </span>
       </div>
 
-      <div className="flex items-center justify-between mb-2">
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5 mb-2">
         <h2 className="text-lg font-heading text-text-primary">{node.name}</h2>
-        <button
-          onClick={() => setFocusNode(focusNodeId === node.id ? null : node.id)}
-          className={`text-[10px] font-semibold uppercase tracking-wider px-2.5 py-1 rounded transition-colors ${
-            focusNodeId === node.id
-              ? "bg-gold/20 text-gold border border-gold/40"
-              : "text-text-muted border border-border-subtle hover:text-gold hover:border-gold/30"
-          }`}
-        >
-          {focusNodeId === node.id ? t.common.unfocus : t.common.focus}
-        </button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            onClick={() => openAiDialog(node.id)}
+            data-testid="ask-ai-button"
+            className="text-[10px] font-semibold uppercase tracking-wider px-2.5 py-1 rounded transition-colors text-text-muted border border-border-subtle hover:text-gold hover:border-gold/30"
+          >
+            ✦ {t.ai.ask}
+          </button>
+          <ImpactButton nodeId={node.id} />
+          <button
+            onClick={() => setFocusNode(focusNodeId === node.id ? null : node.id)}
+            className={`text-[10px] font-semibold uppercase tracking-wider px-2.5 py-1 rounded transition-colors ${
+              focusNodeId === node.id
+                ? "bg-gold/20 text-gold border border-gold/40"
+                : "text-text-muted border border-border-subtle hover:text-gold hover:border-gold/30"
+            }`}
+          >
+            {focusNodeId === node.id ? t.common.unfocus : t.common.focus}
+          </button>
+        </div>
       </div>
 
       <FigmaThumbnail node={node} />
@@ -430,6 +443,8 @@ export default function NodeInfo() {
         </div>
       )}
 
+      <NodeChurnStats node={node} />
+
       {node.languageNotes && (
         <div className="mb-4">
           <button
@@ -456,23 +471,8 @@ export default function NodeInfo() {
         </div>
       )}
 
-      {node.tags.length > 0 && (
-        <div className="mb-4">
-          <h3 className="text-[11px] font-semibold text-accent uppercase tracking-wider mb-2">
-            {t.common.tags}
-          </h3>
-          <div className="flex flex-wrap gap-1.5">
-            {node.tags.map((tag) => (
-              <span
-                key={tag}
-                className="text-[11px] glass text-text-secondary px-2.5 py-1 rounded-full"
-              >
-                {tag}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
+      <NodeTagsSection nodeId={node.id} graphTags={node.tags} />
+      <NodeNotesSection nodeId={node.id} />
 
       {/* Knowledge-specific details */}
       {activeGraph && node && (node.type === "article" || node.type === "entity" || node.type === "topic" || node.type === "claim" || node.type === "source") && (

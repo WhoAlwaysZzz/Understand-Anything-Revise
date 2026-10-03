@@ -1,5 +1,7 @@
 # Understand Anything
 
+Agent rules (commit hygiene, etc.): @AGENTS.md
+
 ## Project Overview
 An open-source tool combining LLM intelligence + static analysis to produce interactive dashboards for understanding codebases.
 
@@ -19,10 +21,21 @@ An open-source tool combining LLM intelligence + static analysis to produce inte
 ## Dashboard
 - Dark luxury theme: deep blacks (#0a0a0a), gold/amber accents (#d4a574), DM Serif Display typography
 - Graph-first layout: 75% graph + 360px right sidebar
-- No ChatPanel or Monaco Editor
+- No Monaco Editor; no persistent chat panel — AI chat is an on-demand "Ask AI" dialog per node (`AskAiDialog.tsx`)
+- Ask AI: the dev server proxies `/ai/config` and `/ai/chat` (`server/ai.ts`, token-gated) to any provider — `openai` protocol (any OpenAI-compatible `/chat/completions`: GPT, DeepSeek, GLM, Qwen, Ollama, OpenRouter, …) or `anthropic` (official SDK). Provider config incl. API key lives in `~/.understand-anything/ai.json` (mode 600, override with `UA_AI_CONFIG`), never in the project; the browser only sees a masked key hint. The viewer has no AI backend, so the dialog falls back to copying the prompt
+- URL hash mirrors navigation state (`utils/urlState.ts`, `hooks/useUrlStateSync.ts`); Ctrl/⌘+K command palette (`CommandPalette.tsx`; register feature commands in `hooks/usePaletteCommands.ts`)
 - Sidebar tabs: `Info` (ProjectOverview default → NodeInfo when node selected → LearnPanel in Learn persona, composing) and `Files` (FileExplorer tree built from the structural graph)
 - Code viewer: prism-react-renderer source viewer that slides up from the bottom on file node click; an expand button promotes it into a full-screen modal. Source content is fetched from the dev server's `/file-content.json` endpoint, gated by access token + a graph-derived path allowlist
 - Schema validation on graph load with error banner
+- Search modes: `Fuzzy`/`Semantic` (node names/tags/summaries + user annotations; `Semantic` upgrades to embedding search via `/ai/semantic-search` — `server/semantic.ts`, vectors cached in the data directory's `embeddings.json` — when an embedding model is configured) and `Code` — full-text search over the graph's files via the dev server's `/search-content.json` (core `content-search.ts`; same graph-derived allowlist as `/file-content.json`)
+- User annotations (personal tags + notes per node) persist to the data directory's `annotations.json` via `/annotations.json` (core `annotations.ts`), separate from `knowledge-graph.json` so `/understand` never overwrites them; the read-only viewer and demo build fall back to localStorage
+- Code viewer grammars beyond prism-react-renderer's bundled set load on demand from `prismjs/components` (`utils/prismLanguages.ts`)
+- Code viewer navigation: Ctrl/⌘+click on identifiers that name a graph node (same file first, then imported files; index in `utils/codeNav.ts`, cached per graph); a collapsible outline and gutter range bars show the open file's ranged child nodes
+- Line notes: clicking a gutter line number edits a note stored on the file node as `annotations.json` `nodes[id].lines` (line → note; core `annotations.ts` sanitises it; version stays 1)
+- Reading progress: files opened in the code viewer are tracked per project in localStorage (`readingProgress.ts`), shown as check marks in Files and "N / M files read" in ProjectOverview
+- My tour: `MyTourDialog` turns annotated nodes into `TourStep[]` (`utils/myTour.ts`, `utils/annotatedNodes.ts`) and plays them via the store's `startCustomTour` / `customTour`; `stopTour`/`startTour` clear it, so `graph.tour` is never touched
+- Notes export: Markdown or an Obsidian vault zip, built in the browser (`utils/notesExport.ts`, `notesExportActions.ts`; dependency-free STORE-only zip writer in `utils/zip.ts`)
+- Analysis overlays (`analysisStore.ts`, one at a time, painted through `nodeMarks` / `markedEdges` read by CustomNode and GraphView): Hotspots (git churn from `/git-hotspots.json`, core `git-hotspots.ts`), Impact (transitive dependents, `utils/impact.ts`), Architecture rules (`arch-rules.json` in the data dir via `/arch-rules.json`, core `arch-rules.ts`, evaluated client-side in `utils/archRules.ts`) and PR review walkthrough (built on `diff-overlay.json`, progress in localStorage). Edge direction for all of them lives in `utils/dependencies.ts`
 
 ## Agent Pipeline
 - Agents write intermediate results to the data directory's `intermediate/` subdirectory on disk (not returned to context) — `.ua/intermediate/`, or `.understand-anything/intermediate/` when that legacy directory is present
@@ -55,7 +68,7 @@ An open-source tool combining LLM intelligence + static analysis to produce inte
 - `scripts/generate-large-graph.mjs` — Generates a fake knowledge graph for performance testing (e.g. large-graph layout). Writes to the project data directory's `knowledge-graph.json` (`.ua/knowledge-graph.json`, or `.understand-anything/` when that legacy directory is present). Usage: `node scripts/generate-large-graph.mjs [nodeCount]` (default: 3000 nodes). Not part of the production pipeline.
 
 ## Viewer Package
-`packages/viewer` serves a committed graph without Claude Code, via `npx <release-asset-url>`. Update it when (a) the dashboard UI changes — the tarball embeds the built `dist/` — or (b) the `vite.config.ts` dev-server middleware changes, which `bin/viewer.mjs` deliberately mirrors. On every release, repack (`pack:release` script) and re-upload the tarball to the GitHub release as `understand-anything-viewer.tgz` — exactly that name, the READMEs' `releases/latest/download/` URL depends on it.
+`packages/viewer` serves a committed graph without Claude Code, via `npx <release-asset-url>`. Update it when (a) the dashboard UI changes — the tarball embeds the built `dist/` — or (b) the `vite.config.ts` dev-server middleware changes, which `bin/viewer.mjs` deliberately mirrors. Server logic shared between the two lives in self-contained core modules (`staleness.ts`, `content-search.ts`, `annotations.ts`, `git-hotspots.ts`, `arch-rules.ts`; the viewer serves `/annotations.json` and `/arch-rules.json` read-only) that `build.mjs` copies into `bin/dist/`. On every release, repack (`pack:release` script) and re-upload the tarball to the GitHub release as `understand-anything-viewer.tgz` — exactly that name, the READMEs' `releases/latest/download/` URL depends on it.
 
 ## Versioning
 When pushing to remote, bump the version in **all six** of these files (keep them in sync):

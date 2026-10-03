@@ -11,6 +11,16 @@ import {
   type GraphFreshnessInput,
   type GraphFreshnessResult,
 } from "../core/src/staleness";
+import {
+  ContentSearchQueryError,
+  parseContentSearchParams,
+  searchProjectContent,
+} from "../core/src/content-search";
+import { handleAnnotationsRequest } from "../core/src/annotations";
+import { handleArchRulesRequest } from "../core/src/arch-rules";
+import { handleGitHotspotsRequest } from "../core/src/git-hotspots";
+import { handleAiRequest } from "./server/ai";
+import { handleSemanticSearchRequest } from "./server/semantic";
 
 // Generate a one-time token when the server process starts.
 // This token is printed to the terminal and must be in the URL
@@ -187,6 +197,29 @@ function readSourceFile(url: URL) {
   };
 }
 
+function searchContent(url: URL) {
+  const { query, options } = parseContentSearchParams(url.searchParams);
+  if (!query.trim()) return rejectFileRequest("Missing query");
+
+  const graphFile = findGraphFile("knowledge-graph.json");
+  if (!graphFile) {
+    return rejectFileRequest("No knowledge graph found. Run /understand first.", 404);
+  }
+  const projectRoot = projectRootFromGraphFile(graphFile);
+  try {
+    return {
+      statusCode: 200,
+      payload: searchProjectContent(projectRoot, graphFilePathSet(graphFile, projectRoot), query, {
+        ...options,
+        maxFileBytes: MAX_SOURCE_FILE_BYTES,
+      }),
+    };
+  } catch (err) {
+    if (err instanceof ContentSearchQueryError) return rejectFileRequest(err.message);
+    throw err;
+  }
+}
+
 export interface DashboardFreshnessReport {
   graphs: {
     knowledge: GraphFreshnessResult;
@@ -292,7 +325,7 @@ type DashboardViteConfig = UserConfig & {
 const config: DashboardViteConfig = {
   test: {
     environment: "node",
-    include: ["src/**/__tests__/**/*.test.ts"],
+    include: ["src/**/__tests__/**/*.test.ts", "server/**/__tests__/**/*.test.ts"],
   },
 
   // FIX 1 — bind only to localhost, not 0.0.0.0
@@ -368,7 +401,12 @@ const config: DashboardViteConfig = {
             pathname === "/diff-overlay.json" ||
             pathname === "/meta.json" ||
             pathname === "/config.json" ||
-            pathname === "/file-content.json";
+            pathname === "/file-content.json" ||
+            pathname === "/search-content.json" ||
+            pathname === "/annotations.json" ||
+            pathname === "/arch-rules.json" ||
+            pathname === "/git-hotspots.json" ||
+            pathname.startsWith("/ai/");
 
           if (!isProtectedEndpoint) {
             next();
@@ -385,6 +423,64 @@ const config: DashboardViteConfig = {
           if (pathname === "/file-content.json") {
             const result = readSourceFile(url);
             sendJson(res, result.statusCode, result.payload);
+            return;
+          }
+
+          if (pathname === "/search-content.json") {
+            const result = searchContent(url);
+            sendJson(res, result.statusCode, result.payload);
+            return;
+          }
+
+          if (pathname === "/ai/semantic-search") {
+            void handleSemanticSearchRequest(req, res, url, findGraphFile("knowledge-graph.json"));
+            return;
+          }
+
+          if (pathname.startsWith("/ai/")) {
+            void handleAiRequest(req, res, pathname).then((handled) => {
+              if (!handled) sendJson(res, 404, { error: "Not found" });
+            });
+            return;
+          }
+
+          if (pathname === "/annotations.json") {
+            const graphFile = findGraphFile("knowledge-graph.json");
+            if (!graphFile) {
+              sendJson(res, 404, { error: "No knowledge graph found. Run /understand first." });
+              return;
+            }
+            res.setHeader("Cache-Control", "no-store");
+            void handleAnnotationsRequest(req, path.dirname(graphFile), { writable: true }).then(
+              (result) => sendJson(res, result.statusCode, result.payload),
+            );
+            return;
+          }
+
+          if (pathname === "/arch-rules.json") {
+            const graphFile = findGraphFile("knowledge-graph.json");
+            if (!graphFile) {
+              sendJson(res, 404, { error: "No knowledge graph found. Run /understand first." });
+              return;
+            }
+            res.setHeader("Cache-Control", "no-store");
+            void handleArchRulesRequest(req, path.dirname(graphFile), { writable: true }).then(
+              (result) => sendJson(res, result.statusCode, result.payload),
+            );
+            return;
+          }
+
+          if (pathname === "/git-hotspots.json") {
+            const graphFile = findGraphFile("knowledge-graph.json");
+            if (!graphFile) {
+              sendJson(res, 404, { error: "No knowledge graph found. Run /understand first." });
+              return;
+            }
+            const projectRoot = projectRootFromGraphFile(graphFile);
+            res.setHeader("Cache-Control", "no-store");
+            void handleGitHotspotsRequest(url, projectRoot, graphFilePathSet(graphFile, projectRoot)).then(
+              (result) => sendJson(res, result.statusCode, result.payload),
+            );
             return;
           }
 

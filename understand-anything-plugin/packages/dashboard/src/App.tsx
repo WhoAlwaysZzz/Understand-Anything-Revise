@@ -2,6 +2,8 @@ import { useEffect, useState, useMemo, useCallback, lazy, Suspense } from "react
 import { validateGraph } from "@understand-anything/core/schema";
 import type { GraphIssue } from "@understand-anything/core/schema";
 import { useDashboardStore } from "./store";
+import { useAnnotationsStore } from "./annotationsStore";
+import { useMyTourStore } from "./myTourStore";
 import GraphView from "./components/GraphView";
 import DomainGraphView from "./components/DomainGraphView";
 import KnowledgeGraphView from "./components/KnowledgeGraphView";
@@ -9,6 +11,8 @@ import SearchBar from "./components/SearchBar";
 import NodeInfo from "./components/NodeInfo";
 import LayerLegend from "./components/LayerLegend";
 import DiffToggle from "./components/DiffToggle";
+import AnalysisToolbar from "./components/AnalysisToolbar";
+import AnalysisSidebar from "./components/AnalysisSidebar";
 import FilterPanel from "./components/FilterPanel";
 import ExportMenu from "./components/ExportMenu";
 import PersonaSelector from "./components/PersonaSelector";
@@ -17,9 +21,12 @@ import FileExplorer from "./components/FileExplorer";
 import WarningBanner from "./components/WarningBanner";
 import StalenessBanner from "./components/StalenessBanner";
 import TokenGate from "./components/TokenGate";
+import ResizableBottomPanel from "./components/ResizableBottomPanel";
 import MobileLayout from "./components/MobileLayout";
 import { useIsMobile } from "./hooks/useIsMobile";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
+import { useUrlStateSync } from "./hooks/useUrlStateSync";
+import { usePaletteCommands } from "./hooks/usePaletteCommands";
 import type { KeyboardShortcut } from "./hooks/useKeyboardShortcuts";
 import { ThemeProvider } from "./themes/index.ts";
 import { ThemePicker } from "./components/ThemePicker.tsx";
@@ -40,6 +47,9 @@ const KeyboardShortcutsHelp = lazy(
   () => import("./components/KeyboardShortcutsHelp"),
 );
 const OnboardingOverlay = lazy(() => import("./components/OnboardingOverlay"));
+const CommandPalette = lazy(() => import("./components/CommandPalette"));
+const AskAiDialog = lazy(() => import("./components/AskAiDialog"));
+const MyTourDialog = lazy(() => import("./components/MyTourDialog"));
 
 const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === "true";
 const SESSION_TOKEN_KEY = "understand-anything-token";
@@ -125,6 +135,7 @@ function Dashboard({ accessToken }: { accessToken: string }) {
     useState<DashboardFreshnessReport | null>(null);
   const [metaTheme, setMetaTheme] = useState<ThemeConfig | null>(null);
   const [outputLanguage, setOutputLanguage] = useState<string | undefined>();
+  useUrlStateSync();
 
   useEffect(() => {
     fetch(dataUrl("meta.json", accessToken))
@@ -192,6 +203,23 @@ function Dashboard({ accessToken }: { accessToken: string }) {
         setLoadError(`Failed to load knowledge graph: ${err instanceof Error ? err.message : String(err)}`);
       });
   }, [setGraph]);
+
+  // Load the user's tags/notes once the graph (and so the project) is known,
+  // and keep the search index in sync with them.
+  const projectName = useDashboardStore((s) => s.graph?.project.name);
+  useEffect(() => {
+    if (projectName === undefined) return;
+    void useAnnotationsStore.getState().load(accessToken, projectName);
+  }, [accessToken, projectName]);
+  useEffect(
+    () =>
+      useAnnotationsStore.subscribe((state, prev) => {
+        if (state.annotations !== prev.annotations) {
+          useDashboardStore.getState().setSearchAnnotations(state.annotations);
+        }
+      }),
+    [],
+  );
 
   useEffect(() => {
     if (
@@ -291,6 +319,8 @@ function DashboardContent({
   const expandCodeViewer = useDashboardStore((s) => s.expandCodeViewer);
   const collapseCodeViewer = useDashboardStore((s) => s.collapseCodeViewer);
   const pathFinderOpen = useDashboardStore((s) => s.pathFinderOpen);
+  const aiDialogOpen = useDashboardStore((s) => s.aiDialog !== null);
+  const myTourBuilderOpen = useMyTourStore((s) => s.builder !== null);
   const togglePathFinder = useDashboardStore((s) => s.togglePathFinder);
   const nodeTypeFilters = useDashboardStore((s) => s.nodeTypeFilters);
   const toggleNodeTypeFilter = useDashboardStore((s) => s.toggleNodeTypeFilter);
@@ -299,6 +329,21 @@ function DashboardContent({
   const showFunctionsInClassView = useDashboardStore((s) => s.showFunctionsInClassView);
   const toggleShowFunctionsInClassView = useDashboardStore((s) => s.toggleShowFunctionsInClassView);
   const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const openShortcutsHelp = useCallback(() => setShowKeyboardHelp(true), []);
+  const paletteCommands = usePaletteCommands({ openShortcutsHelp });
+
+  // Ctrl/⌘+K opens the command palette — from anywhere, including text fields.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((open) => !open);
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("info");
   const [showOnboarding, setShowOnboarding] = useState(shouldShowOnboarding);
   const dismissOnboarding = useCallback((remember: boolean) => {
@@ -334,6 +379,15 @@ function DashboardContent({
         action: () => setShowKeyboardHelp((prev) => !prev),
         category: "General",
       },
+      {
+        key: "k",
+        ctrlKey: true,
+        description: t.palette.open,
+        // Handled by the dedicated listener above (it must also work inside
+        // text fields); listed here so the help overlay shows it.
+        action: () => {},
+        category: "General",
+      },
       // Navigation
       {
         key: "Escape",
@@ -341,7 +395,9 @@ function DashboardContent({
         action: () => {
           // Read from store at invocation time to avoid stale closures
           const state = useDashboardStore.getState();
-          if (state.pathFinderOpen) {
+          if (state.aiDialog) {
+            state.closeAiDialog();
+          } else if (state.pathFinderOpen) {
             state.togglePathFinder();
           } else if (state.filterPanelOpen) {
             state.toggleFilterPanel();
@@ -447,6 +503,7 @@ function DashboardContent({
   const isLearnMode = tourActive || persona === "junior";
   const infoSidebarContent = (
     <>
+      <AnalysisSidebar />
       {selectedNodeId && <NodeInfo />}
       {isLearnMode && (
         <Suspense fallback={null}>
@@ -543,6 +600,7 @@ function DashboardContent({
         <div className="flex-1 min-w-0 overflow-x-auto scrollbar-hide">
           <div className="flex items-center gap-4 w-max">
             <DiffToggle />
+            <AnalysisToolbar accessToken={accessToken} />
             {/* Detail level: file view (architecture) / class view (code structure) */}
             {!isKnowledgeGraph && viewMode !== "domain" && (
               <>
@@ -674,7 +732,7 @@ function DashboardContent({
       </header>
 
       {/* Search */}
-      <SearchBar />
+      <SearchBar accessToken={accessToken} />
 
       {/* Graph freshness warning banner */}
       {!loadError && <StalenessBanner freshness={graphFreshness} />}
@@ -714,11 +772,11 @@ function DashboardContent({
 
         {/* Code viewer slide-up overlay (collapsed state) */}
         {codeViewerOpen && !codeViewerExpanded && (
-          <div className="absolute bottom-0 left-0 right-0 h-[40vh] bg-surface border-t border-border-subtle animate-slide-up z-20 overflow-hidden">
+          <ResizableBottomPanel label={t.codeViewer.resize}>
             <Suspense fallback={null}>
               <CodeViewer accessToken={accessToken} onExpand={expandCodeViewer} />
             </Suspense>
-          </div>
+          </ResizableBottomPanel>
         )}
       </div>
 
@@ -741,6 +799,24 @@ function DashboardContent({
             </Suspense>
           </div>
         </div>
+      )}
+
+      {paletteOpen && (
+        <Suspense fallback={null}>
+          <CommandPalette onClose={() => setPaletteOpen(false)} commands={paletteCommands} />
+        </Suspense>
+      )}
+
+      {aiDialogOpen && (
+        <Suspense fallback={null}>
+          <AskAiDialog accessToken={accessToken} />
+        </Suspense>
+      )}
+
+      {myTourBuilderOpen && (
+        <Suspense fallback={null}>
+          <MyTourDialog />
+        </Suspense>
       )}
 
       {/* Keyboard shortcuts help modal */}
