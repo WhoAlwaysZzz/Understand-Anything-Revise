@@ -8,6 +8,7 @@ import type {
   TourStep,
 } from "@understand-anything/core/types";
 import type { ReactFlowInstance } from "@xyflow/react";
+import type { ContextItem } from "./ai/contextItems";
 
 export type Persona = "non-technical" | "junior" | "experienced";
 export type NavigationLevel = "overview" | "layer-detail";
@@ -175,9 +176,12 @@ interface DashboardStore {
   filterPanelOpen: boolean;
   exportMenuOpen: boolean;
   pathFinderOpen: boolean;
-  /** Ask-AI dialog: null = closed; nodeId null = settings only (no node chosen). */
-  aiDialog: { nodeId: string | null; view: AiDialogView } | null;
-  openAiDialog: (nodeId: string | null, view?: AiDialogView) => void;
+  /**
+   * Ask-AI dialog: null = closed; nodeId null = settings only (no node chosen).
+   * `attach` pre-fills context for the first question (e.g. code viewer lines).
+   */
+  aiDialog: { nodeId: string | null; view: AiDialogView; attach?: ContextItem[] } | null;
+  openAiDialog: (nodeId: string | null, view?: AiDialogView, attach?: ContextItem[]) => void;
   closeAiDialog: () => void;
   reactFlowInstance: ReactFlowInstance | null;
 
@@ -670,7 +674,7 @@ export const useDashboardStore = create<DashboardStore>()((set, get) => ({
     pathFinderOpen: !state.pathFinderOpen,
   })),
 
-  openAiDialog: (nodeId, view = "chat") => set({ aiDialog: { nodeId, view } }),
+  openAiDialog: (nodeId, view = "chat", attach) => set({ aiDialog: { nodeId, view, ...(attach?.length ? { attach } : {}) } }),
   closeAiDialog: () => set({ aiDialog: null }),
 
   setReactFlowInstance: (instance) => set({ reactFlowInstance: instance }),
