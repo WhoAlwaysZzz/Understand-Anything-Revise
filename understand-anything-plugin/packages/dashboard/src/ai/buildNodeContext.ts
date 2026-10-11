@@ -3,6 +3,8 @@ import type { GraphNode, KnowledgeGraph } from "@understand-anything/core/types"
 /** Keep prompts bounded no matter how big the file is. */
 const MAX_SOURCE_LINES = 400;
 const MAX_SOURCE_CHARS = 40_000;
+/** "Whole file" mode still stops somewhere: ~30k tokens. */
+export const MAX_FULL_SOURCE_CHARS = 120_000;
 const MAX_NEIGHBORS = 25;
 const CONTEXT_PADDING = 15;
 
@@ -15,6 +17,9 @@ const LANGUAGE_NAMES: Record<string, string> = {
   ru: "Russian",
 };
 
+/** How much of the node's own file goes into the context. */
+export type SourceMode = "excerpt" | "full" | "none";
+
 export interface NodeContextInput {
   graph: KnowledgeGraph;
   node: GraphNode;
@@ -23,6 +28,8 @@ export interface NodeContextInput {
   userNote?: string;
   userTags?: string[];
   localeKey: string;
+  /** Default "excerpt": the node's line range (padded) or the file head. */
+  sourceMode?: SourceMode;
 }
 
 /** Pick the slice of a file worth sending: the node's range (padded) or the file head. */
@@ -46,11 +53,24 @@ export function sourceExcerpt(source: string, lineRange?: [number, number]): { t
   return { text, startLine: start, truncated };
 }
 
+/** Number every line of `source` from `startLine`, cut at `maxChars`. */
+export function numberLines(source: string, startLine = 1, maxChars = MAX_FULL_SOURCE_CHARS): { text: string; truncated: boolean } {
+  const lines = source.split(/\r\n|\n|\r/);
+  let text = lines.map((l, i) => `${String(startLine + i).padStart(5)}  ${l}`).join("\n");
+  let truncated = false;
+  if (text.length > maxChars) {
+    text = text.slice(0, maxChars);
+    truncated = true;
+  }
+  return { text, truncated };
+}
+
 export function buildSystemPrompt(localeKey: string): string {
   const language = LANGUAGE_NAMES[localeKey] ?? "English";
   return [
     "You are a senior engineer helping a developer understand an unfamiliar codebase through an interactive knowledge-graph dashboard.",
     "Each conversation is about one graph node (a file, function, class, …). You receive its analyzer summary, its relationships, and source code with line numbers.",
+    "The developer may attach more context to any question — other files or line ranges, other graph nodes, or full-text code search hits — under an \"# Attached context\" heading. Use it alongside the node.",
     "Ground every claim in that context and cite file paths with line numbers (e.g. src/auth.ts:42). When the context is not enough to answer, say what is missing instead of guessing.",
     "Prefer clear explanations over restating code. Use Markdown; keep code blocks short.",
     `Answer in ${language} unless the user writes in another language.`,
@@ -58,7 +78,7 @@ export function buildSystemPrompt(localeKey: string): string {
 }
 
 /** The context block sent as the first part of the first user message. */
-export function buildNodeContext({ graph, node, source, userNote, userTags }: NodeContextInput): string {
+export function buildNodeContext({ graph, node, source, userNote, userTags, sourceMode = "excerpt" }: NodeContextInput): string {
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
   const parts: string[] = [];
   parts.push(`# Project\n${graph.project.name}${graph.project.description ? ` — ${graph.project.description}` : ""}`);
@@ -84,7 +104,10 @@ export function buildNodeContext({ graph, node, source, userNote, userTags }: No
   }
   if (rel.length) parts.push(`# Relationships (→ outgoing, ← incoming)\n${rel.join("\n")}`);
 
-  if (source) {
+  if (source && sourceMode === "full") {
+    const { text, truncated } = numberLines(source);
+    parts.push(`# Source${truncated ? " (truncated)" : " (whole file)"} — ${node.filePath}\n\`\`\`\n${text}\n\`\`\``);
+  } else if (source && sourceMode === "excerpt") {
     const { text, truncated } = sourceExcerpt(source, node.lineRange);
     parts.push(`# Source${truncated ? " (excerpt)" : ""} — ${node.filePath}\n\`\`\`\n${text}\n\`\`\``);
   }
