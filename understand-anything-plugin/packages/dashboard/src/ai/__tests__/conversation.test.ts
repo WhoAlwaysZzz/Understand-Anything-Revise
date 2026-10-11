@@ -29,3 +29,17 @@ describe("toMessages", () => {
     expect(msgs.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
   });
 });
+
+describe("toMessages with attached context", () => {
+  it("puts each turn's attached context in front of its own question", () => {
+    const msgs = toMessages("CTX", [
+      { question: "q1", answer: "a1", status: "done", context: "# Attached\nA" },
+      { question: "q2", answer: "", status: "streaming", context: "# Attached\nB" },
+    ]);
+    expect(msgs).toEqual([
+      { role: "user", content: "CTX\n\n# Attached\nA\n\n# Question\nq1" },
+      { role: "assistant", content: "a1" },
+      { role: "user", content: "# Attached\nB\n\n# Question\nq2" },
+    ]);
+  });
+});
