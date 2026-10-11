@@ -71,6 +71,21 @@ function writeOutlineOpen(open: boolean): void {
   }
 }
 
+/** The code lines covered by the current text selection inside `container`, if any. */
+function selectedLineRange(container: HTMLElement | null): [number, number] | null {
+  const selection = window.getSelection();
+  if (!container || !selection || selection.isCollapsed || selection.rangeCount === 0) return null;
+  const lineOf = (n: Node | null): number | null => {
+    const el = n instanceof Element ? n : n?.parentElement;
+    const line = el?.closest<HTMLElement>("[data-line]");
+    return line && container.contains(line) ? Number(line.dataset.line) : null;
+  };
+  const start = lineOf(selection.anchorNode);
+  const end = lineOf(selection.focusNode);
+  if (start === null || end === null) return null;
+  return [Math.min(start, end), Math.max(start, end)];
+}
+
 function nodeColor(type: string): string {
   return `var(--color-node-${type}, var(--color-text-muted))`;
 }
@@ -152,6 +167,25 @@ export default function CodeViewer({
   const [mdView, setMdView] = useState<"rendered" | "source">("rendered");
   const { t } = useI18n();
   const { preset } = useTheme();
+
+  // Lines selected in the source, offered to Ask AI as attached context.
+  const [selectedLines, setSelectedLines] = useState<[number, number] | null>(null);
+  useEffect(() => {
+    const onSelectionChange = () => {
+      const next = selectedLineRange(scrollRef.current);
+      setSelectedLines((prev) => (prev?.[0] === next?.[0] && prev?.[1] === next?.[1] ? prev : next));
+    };
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () => document.removeEventListener("selectionchange", onSelectionChange);
+  }, []);
+  const canAskAi = !!node && nodesById.has(node.id);
+  const askAi = () => {
+    if (!node) return;
+    const lines = selectedLineRange(scrollRef.current);
+    useDashboardStore
+      .getState()
+      .openAiDialog(node.id, "chat", lines && node.filePath ? [{ kind: "file", path: node.filePath, lines }] : undefined);
+  };
 
   // Prefer the client-side mapping (it knows which grammars exist); fall back
   // to the server's guess for extensions the client doesn't recognise.
@@ -394,6 +428,23 @@ export default function CodeViewer({
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {canAskAi && (
+            <button
+              type="button"
+              // Keep the code selection alive until the click reads it.
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={askAi}
+              data-testid="code-viewer-ask-ai"
+              title={selectedLines ? fmt(t.ai.askAboutSelection, { start: selectedLines[0], end: selectedLines[1] }) : t.ai.askAboutFile}
+              className={`text-[10px] font-semibold px-2 py-0.5 rounded border transition-colors ${
+                selectedLines
+                  ? "text-accent border-accent/40 bg-accent/10"
+                  : "text-text-muted border-border-subtle hover:text-accent hover:border-accent/40"
+              }`}
+            >
+              ✦ {selectedLines ? `${selectedLines[0]}–${selectedLines[1]}` : t.ai.ask}
+            </button>
+          )}
           {onExpand && (
             <button
               type="button"

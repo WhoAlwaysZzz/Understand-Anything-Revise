@@ -17,6 +17,7 @@ import {
   searchProjectContent,
 } from "../core/src/content-search";
 import { handleAnnotationsRequest } from "../core/src/annotations";
+import { handleAiChatsRequest } from "../core/src/ai-chats";
 import { handleArchRulesRequest } from "../core/src/arch-rules";
 import { handleGitHotspotsRequest } from "../core/src/git-hotspots";
 import { handleAiRequest } from "./server/ai";
@@ -404,6 +405,7 @@ const config: DashboardViteConfig = {
             pathname === "/file-content.json" ||
             pathname === "/search-content.json" ||
             pathname === "/annotations.json" ||
+            pathname === "/ai-chats.json" ||
             pathname === "/arch-rules.json" ||
             pathname === "/git-hotspots.json" ||
             pathname.startsWith("/ai/");
@@ -452,6 +454,19 @@ const config: DashboardViteConfig = {
             }
             res.setHeader("Cache-Control", "no-store");
             void handleAnnotationsRequest(req, path.dirname(graphFile), { writable: true }).then(
+              (result) => sendJson(res, result.statusCode, result.payload),
+            );
+            return;
+          }
+
+          if (pathname === "/ai-chats.json") {
+            const graphFile = findGraphFile("knowledge-graph.json");
+            if (!graphFile) {
+              sendJson(res, 404, { error: "No knowledge graph found. Run /understand first." });
+              return;
+            }
+            res.setHeader("Cache-Control", "no-store");
+            void handleAiChatsRequest(req, url, path.dirname(graphFile), { writable: true }).then(
               (result) => sendJson(res, result.statusCode, result.payload),
             );
             return;

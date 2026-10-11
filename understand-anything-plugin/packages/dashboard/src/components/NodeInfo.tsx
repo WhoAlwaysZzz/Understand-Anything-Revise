@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useDashboardStore } from "../store";
+import { useAiChatsStore } from "../aiChatsStore";
 import { useI18n } from "../contexts/I18nContext";
+import { fmt } from "../locales";
 import { NodeNotesSection, NodeTagsSection } from "./NodeAnnotations";
 import { ImpactButton, NodeChurnStats } from "./NodeAnalysis";
 import type { NodeType, EdgeType, KnowledgeGraph, GraphNode } from "@understand-anything/core/types";
@@ -289,6 +291,7 @@ export default function NodeInfo() {
   const navigateToHistoryIndex = useDashboardStore((s) => s.navigateToHistoryIndex);
   const setFocusNode = useDashboardStore((s) => s.setFocusNode);
   const openAiDialog = useDashboardStore((s) => s.openAiDialog);
+  const savedChats = useAiChatsStore((s) => (selectedNodeId ? s.index[selectedNodeId]?.count ?? 0 : 0));
   const openCodeViewer = useDashboardStore((s) => s.openCodeViewer);
   const focusNodeId = useDashboardStore((s) => s.focusNodeId);
   const viewMode = useDashboardStore((s) => s.viewMode);
@@ -397,6 +400,11 @@ export default function NodeInfo() {
             className="text-[10px] font-semibold uppercase tracking-wider px-2.5 py-1 rounded transition-colors text-text-muted border border-border-subtle hover:text-gold hover:border-gold/30"
           >
             ✦ {t.ai.ask}
+            {savedChats > 0 && (
+              <span className="ml-1 text-accent" title={fmt(t.ai.chatCount, { count: savedChats })}>
+                · {savedChats}
+              </span>
+            )}
           </button>
           <ImpactButton nodeId={node.id} />
           <button

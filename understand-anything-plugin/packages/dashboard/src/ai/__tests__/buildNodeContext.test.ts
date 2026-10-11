@@ -45,3 +45,20 @@ describe("buildNodeContext", () => {
     expect(buildSystemPrompt("ja")).toContain("Answer in Japanese");
   });
 });
+
+describe("buildNodeContext source modes", () => {
+  const source = Array.from({ length: 600 }, (_, i) => `line ${i + 1}`).join("\n");
+  const base = { graph, node: graph.nodes[0], source, localeKey: "en" };
+
+  it("sends the whole file in full mode", () => {
+    const ctx = buildNodeContext({ ...base, sourceMode: "full" });
+    expect(ctx).toContain("(whole file)");
+    expect(ctx).toContain("  600  line 600");
+  });
+
+  it("leaves the source out in none mode", () => {
+    const ctx = buildNodeContext({ ...base, sourceMode: "none" });
+    expect(ctx).not.toContain("# Source");
+    expect(ctx).toContain("# Node: login");
+  });
+});
