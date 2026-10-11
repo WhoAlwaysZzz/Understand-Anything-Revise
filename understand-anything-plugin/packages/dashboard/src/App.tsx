@@ -3,6 +3,7 @@ import { validateGraph } from "@understand-anything/core/schema";
 import type { GraphIssue } from "@understand-anything/core/schema";
 import { useDashboardStore } from "./store";
 import { useAnnotationsStore } from "./annotationsStore";
+import { useAiChatsStore } from "./aiChatsStore";
 import { useMyTourStore } from "./myTourStore";
 import GraphView from "./components/GraphView";
 import DomainGraphView from "./components/DomainGraphView";
@@ -204,12 +205,13 @@ function Dashboard({ accessToken }: { accessToken: string }) {
       });
   }, [setGraph]);
 
-  // Load the user's tags/notes once the graph (and so the project) is known,
+  // Load the user's tags/notes (and saved Ask AI chats) once the graph (and so the project) is known,
   // and keep the search index in sync with them.
   const projectName = useDashboardStore((s) => s.graph?.project.name);
   useEffect(() => {
     if (projectName === undefined) return;
     void useAnnotationsStore.getState().load(accessToken, projectName);
+    void useAiChatsStore.getState().load(accessToken, projectName);
   }, [accessToken, projectName]);
   useEffect(
     () =>
