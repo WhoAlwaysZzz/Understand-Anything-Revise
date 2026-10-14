@@ -104,8 +104,23 @@ export default function AskAiDialog({ accessToken }: { accessToken: string }) {
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
+  // Follow the stream only while the reader is already at the bottom; if they
+  // scrolled up to re-read, leave them there. A new question always jumps down.
+  const stickToBottomRef = useRef(true);
+  const turnCountRef = useRef(0);
+  const onTranscriptScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 32;
+  }, []);
+
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+    const el = scrollRef.current;
+    if (turns.length !== turnCountRef.current) {
+      turnCountRef.current = turns.length;
+      stickToBottomRef.current = true;
+    }
+    if (el && stickToBottomRef.current) el.scrollTo({ top: el.scrollHeight });
   }, [turns]);
 
   const showSettings = config !== undefined && config !== null && (view !== "chat" || !config.configured || !node);
@@ -288,7 +303,7 @@ export default function AskAiDialog({ accessToken }: { accessToken: string }) {
 
         {config && !showSettings && node && (
           <>
-            <div ref={scrollRef} className="flex-1 overflow-auto px-5 py-4 space-y-5" data-testid="ai-transcript">
+            <div ref={scrollRef} onScroll={onTranscriptScroll} className="flex-1 overflow-auto px-5 py-4 space-y-5" data-testid="ai-transcript">
               {turns.length === 0 && (
                 <div className="space-y-3">
                   <p className="text-[11px] text-text-muted">{fmt(a.contextNote, { model: modelLabel })}</p>
