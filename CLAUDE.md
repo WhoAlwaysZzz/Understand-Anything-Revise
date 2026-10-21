@@ -1,41 +1,13 @@
 # Understand Anything
 
-Agent rules (commit hygiene, etc.): @AGENTS.md
+Git 提交遵循已加载的全局单一行为变更规则。
 
-## Project Overview
-An open-source tool combining LLM intelligence + static analysis to produce interactive dashboards for understanding codebases.
+## Dashboard 约定
 
-## Prerequisites
-- Node.js >= 22 (developed on v24)
-- pnpm >= 10 (pinned via `packageManager` field in root `package.json`)
-
-## Architecture
-- **Monorepo** with pnpm workspaces
-- **understand-anything-plugin/** — Claude Code plugin containing all source code:
-  - **packages/core** — Shared analysis engine (types, persistence, tree-sitter, search, schema, tours, plugins)
-  - **packages/dashboard** — React + TypeScript web dashboard (React Flow, Zustand, TailwindCSS v4)
-  - **src/** — Skill TypeScript source for `/understand-chat`, `/understand-diff`, `/understand-explain`, `/understand-onboard`
-  - **skills/** — Skill definitions (`/understand`, `/understand-dashboard`, etc.)
-  - **agents/** — Agent definitions (project-scanner, file-analyzer, architecture-analyzer, tour-builder, graph-reviewer)
-
-## Dashboard
-- Dark luxury theme: deep blacks (#0a0a0a), gold/amber accents (#d4a574), DM Serif Display typography
-- Graph-first layout: 75% graph + 360px right sidebar
-- No Monaco Editor; no persistent chat panel — AI chat is an on-demand "Ask AI" dialog per node (`AskAiDialog.tsx`)
-- Ask AI: the dev server proxies `/ai/config` and `/ai/chat` (`server/ai.ts`, token-gated) to any provider — `openai` protocol (any OpenAI-compatible `/chat/completions`: GPT, DeepSeek, GLM, Qwen, Ollama, OpenRouter, …) or `anthropic` (official SDK). Provider config incl. API key lives in `~/.understand-anything/ai.json` (mode 600, override with `UA_AI_CONFIG`), never in the project; the browser only sees a masked key hint. The viewer has no AI backend, so the dialog falls back to copying the prompt
-- URL hash mirrors navigation state (`utils/urlState.ts`, `hooks/useUrlStateSync.ts`); Ctrl/⌘+K command palette (`CommandPalette.tsx`; register feature commands in `hooks/usePaletteCommands.ts`)
-- Sidebar tabs: `Info` (ProjectOverview default → NodeInfo when node selected → LearnPanel in Learn persona, composing) and `Files` (FileExplorer tree built from the structural graph)
-- Code viewer: prism-react-renderer source viewer that slides up from the bottom on file node click; an expand button promotes it into a full-screen modal. Source content is fetched from the dev server's `/file-content.json` endpoint, gated by access token + a graph-derived path allowlist
-- Schema validation on graph load with error banner
-- Search modes: `Fuzzy`/`Semantic` (node names/tags/summaries + user annotations; `Semantic` upgrades to embedding search via `/ai/semantic-search` — `server/semantic.ts`, vectors cached in the data directory's `embeddings.json` — when an embedding model is configured) and `Code` — full-text search over the graph's files via the dev server's `/search-content.json` (core `content-search.ts`; same graph-derived allowlist as `/file-content.json`)
-- User annotations (personal tags + notes per node) persist to the data directory's `annotations.json` via `/annotations.json` (core `annotations.ts`), separate from `knowledge-graph.json` so `/understand` never overwrites them; the read-only viewer and demo build fall back to localStorage
-- Code viewer grammars beyond prism-react-renderer's bundled set load on demand from `prismjs/components` (`utils/prismLanguages.ts`)
-- Code viewer navigation: Ctrl/⌘+click on identifiers that name a graph node (same file first, then imported files; index in `utils/codeNav.ts`, cached per graph); a collapsible outline and gutter range bars show the open file's ranged child nodes
-- Line notes: clicking a gutter line number edits a note stored on the file node as `annotations.json` `nodes[id].lines` (line → note; core `annotations.ts` sanitises it; version stays 1)
-- Reading progress: files opened in the code viewer are tracked per project in localStorage (`readingProgress.ts`), shown as check marks in Files and "N / M files read" in ProjectOverview
-- My tour: `MyTourDialog` turns annotated nodes into `TourStep[]` (`utils/myTour.ts`, `utils/annotatedNodes.ts`) and plays them via the store's `startCustomTour` / `customTour`; `stopTour`/`startTour` clear it, so `graph.tour` is never touched
-- Notes export: Markdown or an Obsidian vault zip, built in the browser (`utils/notesExport.ts`, `notesExportActions.ts`; dependency-free STORE-only zip writer in `utils/zip.ts`)
-- Analysis overlays (`analysisStore.ts`, one at a time, painted through `nodeMarks` / `markedEdges` read by CustomNode and GraphView): Hotspots (git churn from `/git-hotspots.json`, core `git-hotspots.ts`), Impact (transitive dependents, `utils/impact.ts`), Architecture rules (`arch-rules.json` in the data dir via `/arch-rules.json`, core `arch-rules.ts`, evaluated client-side in `utils/archRules.ts`) and PR review walkthrough (built on `diff-overlay.json`, progress in localStorage). Edge direction for all of them lives in `utils/dependencies.ts`
+- 保留深黑与金色视觉主题；以图为主、右侧栏辅助导航，AI 对话按节点按需打开。
+- AI 密钥保存在项目外的用户配置（可由 `UA_AI_CONFIG` 指定）；浏览器只见掩码提示。文件读取及搜索遵守令牌与图路径白名单。
+- 用户批注存放在独立的 `annotations.json`，重新分析图时保留这些数据。
+- 实现细节、快捷键、组件名和端点列表按 dashboard 源码核实。
 
 ## Agent Pipeline
 - Agents write intermediate results to the data directory's `intermediate/` subdirectory on disk (not returned to context) — `.ua/intermediate/`, or `.understand-anything/intermediate/` when that legacy directory is present
@@ -43,29 +15,15 @@ An open-source tool combining LLM intelligence + static analysis to produce inte
 - `/understand` auto-triggers `/understand-dashboard` after completion
 - Intermediate files cleaned up after graph assembly
 
-## Key Commands
-- `pnpm install` — Install all dependencies
-- `pnpm --filter @understand-anything/core build` — Build the core package
-- `pnpm --filter @understand-anything/core test` — Run core tests
-- `pnpm --filter @understand-anything/skill build` — Build the plugin package
-- `pnpm test` — Run all tests (skill tests live at repo-root `tests/skill/`, picked up by root `vitest.config.ts`)
-- `pnpm --filter @understand-anything/dashboard build` — Build the dashboard
-- `pnpm dev:dashboard` — Start dashboard dev server
-- `pnpm lint` — Run ESLint across the project
+## 构建与验证
 
-## Conventions
-- TypeScript strict mode everywhere
-- Vitest for testing
-- ESM modules (`"type": "module"`)
+运行命令前读取根目录与目标包的 `package.json` scripts；skill 测试由根目录 `tests/skill/` 和 `vitest.config.ts` 承担。
 - Knowledge graph JSON lives in the analyzed project's data directory: `.ua/` for new projects, or the legacy `.understand-anything/` directory when it already exists (if `.understand-anything/` is present it is used for both reads and writes; otherwise `.ua/`). All bundled scripts and core code self-resolve this rule.
 - Core uses subpath exports (`./search`, `./types`, `./schema`) to avoid pulling Node.js modules into browser
 
 ## Gotchas
 - **tree-sitter**: Uses `web-tree-sitter` (WASM) instead of native `tree-sitter` — native bindings fail on darwin/arm64 + Node 24
 - **Dashboard imports**: Dashboard must only import from core's browser-safe subpath exports (`./search`, `./types`, `./schema`), never the main entry point which pulls in Node.js modules
-
-## Scripts
-- `scripts/generate-large-graph.mjs` — Generates a fake knowledge graph for performance testing (e.g. large-graph layout). Writes to the project data directory's `knowledge-graph.json` (`.ua/knowledge-graph.json`, or `.understand-anything/` when that legacy directory is present). Usage: `node scripts/generate-large-graph.mjs [nodeCount]` (default: 3000 nodes). Not part of the production pipeline.
 
 ## Viewer Package
 `packages/viewer` serves a committed graph without Claude Code, via `npx <release-asset-url>`. Update it when (a) the dashboard UI changes — the tarball embeds the built `dist/` — or (b) the `vite.config.ts` dev-server middleware changes, which `bin/viewer.mjs` deliberately mirrors. Server logic shared between the two lives in self-contained core modules (`staleness.ts`, `content-search.ts`, `annotations.ts`, `git-hotspots.ts`, `arch-rules.ts`; the viewer serves `/annotations.json` and `/arch-rules.json` read-only) that `build.mjs` copies into `bin/dist/`. On every release, repack (`pack:release` script) and re-upload the tarball to the GitHub release as `understand-anything-viewer.tgz` — exactly that name, the READMEs' `releases/latest/download/` URL depends on it.
@@ -83,33 +41,4 @@ Note: `.claude-plugin/marketplace.json` does **not** carry a version — the `pl
 
 ## Testing Local Plugin Changes
 
-Claude Code caches installed plugins at `~/.claude/plugins/cache/understand-anything/understand-anything/<version>/`. Symlinks don't work because Claude's Search/Glob tools can't follow them. To test local changes:
-
-1. **Build the packages:**
-   ```bash
-   pnpm --filter @understand-anything/core build
-   pnpm --filter @understand-anything/skill build
-   ```
-
-2. **Find the installed version** (must match what the marketplace currently serves):
-   ```bash
-   ls ~/.claude/plugins/cache/understand-anything/understand-anything/
-   ```
-
-3. **Copy your local plugin into the cache**, replacing `<VERSION>` with the version from step 2:
-   ```bash
-   rm -rf ~/.claude/plugins/cache/understand-anything/understand-anything/<VERSION>
-   cp -R ./understand-anything-plugin ~/.claude/plugins/cache/understand-anything/understand-anything/<VERSION>
-   ```
-
-4. **Start a fresh Claude Code session** (existing sessions cache the old prompts in context).
-
-5. **Run `/understand --full`** in the target project to verify.
-
-**Re-sync after further changes:**
-```bash
-pnpm --filter @understand-anything/core build && \
-cp -R ./understand-anything-plugin/* ~/.claude/plugins/cache/understand-anything/understand-anything/<VERSION>/
-```
-
-**To revert to upstream:** Uninstall and reinstall the plugin from the marketplace — it repopulates the cache from the upstream repo.
+本地插件验证时，先核实实际安装来源、版本和目录，再构建所需包。缓存更新涉及覆盖已有数据时先保留可恢复副本；执行删除前遵循全局明确授权要求。使用新的 Claude Code 会话验证提示词更新，最后在目标项目运行 `/understand --full`。
