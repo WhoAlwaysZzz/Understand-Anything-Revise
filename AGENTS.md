@@ -1,10 +1,3 @@
-# Agent Rules
+# 项目指引
 
-Rules for any coding agent (Claude Code, Codex, Cursor, etc.) working in this repository.
-Project architecture, commands and conventions live in [CLAUDE.md](./CLAUDE.md).
-
-## Git
-
-- Keep commits small. Each commit should hold one logical change; do not mix
-  large amounts of unrelated changes into a single commit. Split refactors,
-  features, dependency bumps and version bumps into separate commits.
+本项目特有约定统一维护在 [CLAUDE.md](./CLAUDE.md)，开始相关工作前读取。Git 提交遵循已加载的全局单一行为变更规则。
